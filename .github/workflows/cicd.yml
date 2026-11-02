@@ -1,0 +1,87 @@
+
+name: Experiment 15 - CI CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/cicd-demo
+
+jobs:
+
+  build-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build and Run Tests
+        run: mvn clean verify
+
+  docker-deploy:
+    name: Docker Build and EC2 Deployment
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build Application JAR
+        run: mvn clean package -DskipTests
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Deploy on AWS EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            sudo docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+            sudo docker stop cicd-app || true
+
+            sudo docker rm cicd-app || true
+
+            sudo docker run -d \
+              --name cicd-app \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+            sudo docker ps
